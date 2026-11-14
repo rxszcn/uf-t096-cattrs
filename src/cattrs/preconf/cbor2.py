@@ -2,6 +2,7 @@
 
 from collections.abc import Set
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, TypeVar, Union
 
 from cbor2 import dumps, loads
@@ -14,6 +15,7 @@ from ..strategies import configure_union_passthrough
 from . import (
     is_primitive_enum,
     literals_with_enums_unstructure_factory,
+    structure_decimal,
     unstructure_datetime_as_timestamp,
     wrap,
 )
@@ -40,8 +42,15 @@ def configure_converter(converter: BaseConverter):
     Configure the converter for use with the cbor2 library.
 
     * datetimes are serialized as timestamp floats
+    * decimals are passed through to be serialized as decimal fractions
+      (CBOR tag 4) by cbor2 itself
     * sets are serialized as lists
     * string and int enums are passed through when unstructuring
+
+    .. versionchanged:: NEXT
+        Decimals are passed through to cbor2, which serializes them
+        losslessly as decimal fractions (CBOR tag 4), and are included in
+        the union passthrough configuration.
     """
     converter.register_unstructure_hook(datetime, unstructure_datetime_as_timestamp)
     converter.register_structure_hook(
@@ -49,11 +58,15 @@ def configure_converter(converter: BaseConverter):
     )
     converter.register_unstructure_hook(date, lambda v: v.isoformat())
     converter.register_structure_hook(date, lambda v, _: date.fromisoformat(v))
+    converter.register_unstructure_hook(Decimal, identity)
+    converter.register_structure_hook(Decimal, structure_decimal)
     converter.register_unstructure_hook_factory(is_primitive_enum, lambda t: identity)
     converter.register_unstructure_hook_factory(
         is_literal_containing_enums, literals_with_enums_unstructure_factory
     )
-    configure_union_passthrough(Union[str, bool, int, float, None, bytes], converter)
+    configure_union_passthrough(
+        Union[str, bool, int, float, None, bytes, Decimal], converter
+    )
 
 
 @wrap(Cbor2Converter)

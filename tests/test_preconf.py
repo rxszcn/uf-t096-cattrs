@@ -3,6 +3,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator, Set
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from enum import Enum, IntEnum, unique
 from json import dumps as json_dumps
 from json import loads as json_loads
@@ -45,6 +46,7 @@ from cattrs._compat import (
     Sequence,
     TupleSubscriptable,
 )
+from cattrs.errors import ClassValidationError, StructureHandlerNotFoundError
 from cattrs.fns import identity
 from cattrs.preconf.bson import make_converter as bson_make_converter
 from cattrs.preconf.json import make_converter as json_make_converter
@@ -1155,3 +1157,257 @@ def test_naive_datetimes_are_unstructured_as_utc_cbor2(
     from cattrs.preconf.cbor2 import make_converter as cbor2_make_converter
 
     test_naive_datetimes_are_unstructured_as_utc(cbor2_make_converter, set_timezone)
+
+
+@define
+class DecimalHolder:
+    """A class with Decimal fields, for preconf round-trip tests."""
+
+    amount: Decimal
+    rate: Decimal
+
+
+# All values have at most 34 significant digits so they also fit BSON Decimal128.
+DECIMAL_TEST_VALUES = [
+    Decimal("12.34"),
+    Decimal("0.045"),
+    Decimal("-7"),
+    Decimal("0"),
+    Decimal("1E+10"),
+    Decimal("0.000000001"),
+    Decimal("1.23456789012345678901234567890123"),
+    Decimal("-9999999999999999999999999999999999"),
+]
+
+_all_converter_factories = pytest.mark.parametrize(
+    "converter_factory",
+    [
+        pytest.param(bson_make_converter, id="bson"),
+        pytest.param(json_make_converter, id="json"),
+        pytest.param(msgpack_make_converter, id="msgpack"),
+        pytest.param(pyyaml_make_converter, id="pyyaml"),
+        pytest.param(tomlkit_make_converter, id="tomlkit"),
+        pytest.param(tomllib_make_converter, id="tomllib"),
+        pytest.param(ujson_make_converter, id="ujson"),
+        pytest.param(
+            None if NO_CBOR2 else cbor2_make_converter,
+            marks=pytest.mark.skipif(NO_CBOR2, reason="cbor2 not available"),
+            id="cbor2",
+        ),
+        pytest.param(
+            None if NO_ORJSON else orjson_make_converter,
+            marks=pytest.mark.skipif(NO_ORJSON, reason="orjson not available"),
+            id="orjson",
+        ),
+        pytest.param(
+            None if NO_MSGSPEC else msgspec_make_converter,
+            marks=pytest.mark.skipif(NO_MSGSPEC, reason="msgspec not available"),
+            id="msgspec",
+        ),
+    ],
+)
+
+
+@_all_converter_factories
+@pytest.mark.parametrize("detailed_validation", [True, False])
+def test_decimal_roundtrip(
+    converter_factory: Callable[..., Converter], detailed_validation: bool
+):
+    """Decimals survive a dumps/loads round-trip exactly, in all preconf converters."""
+    converter = converter_factory(detailed_validation=detailed_validation)
+
+    for value in DECIMAL_TEST_VALUES:
+        holder = DecimalHolder(value, Decimal("0.045"))
+        res = converter.loads(converter.dumps(holder), DecimalHolder)
+
+        assert res == holder
+        assert res.amount.as_tuple() == value.as_tuple()
+
+
+@_all_converter_factories
+def test_decimal_structure_from_primitives(converter_factory: Callable[..., Converter]):
+    """Decimals can be structured from strings, ints, floats and Decimals."""
+    converter = converter_factory()
+
+    assert converter.structure("12.34", Decimal) == Decimal("12.34")
+    assert converter.structure(5, Decimal) == Decimal(5)
+    assert converter.structure(Decimal("1.5"), Decimal) == Decimal("1.5")
+    # Floats convert through their shortest round-trip string form,
+    # not their exact binary expansion.
+    assert converter.structure(0.1, Decimal) == Decimal("0.1")
+
+
+@_all_converter_factories
+def test_decimal_validation_errors(converter_factory: Callable[..., Converter]):
+    """Invalid decimals raise validation errors, unified across all converters."""
+    converter = converter_factory(detailed_validation=True)
+
+    with pytest.raises(ClassValidationError) as exc_info:
+        converter.structure({"amount": "not a decimal", "rate": "0.1"}, DecimalHolder)
+
+    excs = exc_info.value.exceptions
+    assert len(excs) == 1
+    assert isinstance(excs[0], ValueError)
+
+    # Bad types are also validation errors, not dispatch errors.
+    with pytest.raises(ClassValidationError):
+        converter.structure({"amount": ["1.5"], "rate": "0.1"}, DecimalHolder)
+
+    converter = converter_factory(detailed_validation=False)
+    with pytest.raises(ValueError):
+        converter.structure({"amount": "not a decimal", "rate": "0.1"}, DecimalHolder)
+
+
+@pytest.mark.parametrize(
+    "converter_factory,expected_type",
+    [
+        pytest.param(json_make_converter, str, id="json"),
+        pytest.param(ujson_make_converter, str, id="ujson"),
+        pytest.param(msgpack_make_converter, str, id="msgpack"),
+        pytest.param(pyyaml_make_converter, str, id="pyyaml"),
+        pytest.param(tomlkit_make_converter, str, id="tomlkit"),
+        pytest.param(tomllib_make_converter, str, id="tomllib"),
+        pytest.param(
+            None if NO_ORJSON else orjson_make_converter,
+            str,
+            marks=pytest.mark.skipif(NO_ORJSON, reason="orjson not available"),
+            id="orjson",
+        ),
+        pytest.param(
+            None if NO_MSGSPEC else msgspec_make_converter,
+            str,
+            marks=pytest.mark.skipif(NO_MSGSPEC, reason="msgspec not available"),
+            id="msgspec",
+        ),
+        pytest.param(
+            None if NO_CBOR2 else cbor2_make_converter,
+            Decimal,
+            marks=pytest.mark.skipif(NO_CBOR2, reason="cbor2 not available"),
+            id="cbor2",
+        ),
+    ],
+)
+def test_decimal_unstructured_representation(
+    converter_factory: Callable[..., Converter], expected_type: type
+):
+    """Each converter unstructures decimals into its documented carrier type."""
+    converter = converter_factory()
+
+    unstructured = converter.unstructure(
+        DecimalHolder(Decimal("12.34"), Decimal("0.045"))
+    )
+
+    assert type(unstructured["amount"]) is expected_type
+    if expected_type is str:
+        assert unstructured["amount"] == "12.34"
+    else:
+        assert unstructured["amount"] == Decimal("12.34")
+
+
+def test_decimal_unstructured_representation_bson():
+    """The bson converter unstructures decimals into Decimal128."""
+    from bson.decimal128 import Decimal128
+
+    converter = bson_make_converter()
+
+    unstructured = converter.unstructure(Decimal("12.34"))
+
+    assert type(unstructured) is Decimal128
+    assert unstructured.to_decimal() == Decimal("12.34")
+
+
+@pytest.mark.skipif(NO_MSGSPEC, reason="msgspec not available")
+def test_decimal_unstructured_representation_msgspec():
+    """msgspec serializes passed-through decimals as JSON strings."""
+    converter = msgspec_make_converter()
+
+    assert converter.dumps(DecimalHolder(Decimal("12.34"), Decimal("0.045"))) == (
+        b'{"amount":"12.34","rate":"0.045"}'
+    )
+
+
+def test_bson_decimal128_precision_limit():
+    """Decimals with over 34 significant digits cannot be unstructured as Decimal128."""
+    from decimal import Inexact
+
+    converter = bson_make_converter()
+
+    with pytest.raises(Inexact):
+        converter.unstructure(Decimal("1" * 35))
+
+
+def test_base_converters_decimal_behavior_unchanged():
+    """Unconfigured converters keep their existing Decimal behavior."""
+    from cattrs import BaseConverter
+
+    for converter in (BaseConverter(), Converter()):
+        # Unstructuring falls back to identity.
+        assert converter.unstructure(Decimal("1.5")) == Decimal("1.5")
+        # No structure hook is registered.
+        with pytest.raises(StructureHandlerNotFoundError):
+            converter.structure("1.5", Decimal)
+
+
+@pytest.mark.skipif(NO_CBOR2, reason="cbor2 not available")
+def test_cbor2_decimal_union_passthrough():
+    """Decimals are part of the cbor2 union passthrough configuration."""
+    converter = cbor2_make_converter()
+
+    assert converter.structure(Decimal("1.5"), Union[Decimal, str, int]) == Decimal(
+        "1.5"
+    )
+    assert converter.structure("a", Union[Decimal, str, int]) == "a"
+    assert converter.structure(1, Union[Decimal, str, int]) == 1
+
+    # Round-trip through actual CBOR (tag 4 decodes back into a Decimal).
+    assert converter.loads(
+        converter.dumps(Decimal("1.5")), Union[Decimal, str]
+    ) == Decimal("1.5")
+
+
+def test_bson_decimal_union_passthrough():
+    """Decimal128 is part of the bson union passthrough configuration.
+
+    Unions containing `Decimal` itself resolve Decimal128 payloads through
+    the spillover path into actual Decimals.
+    """
+    from bson.decimal128 import Decimal128
+
+    converter = bson_make_converter()
+
+    d128 = Decimal128("1.5")
+    assert converter.structure(d128, Union[Decimal128, str]) is d128
+    assert converter.structure(d128, Union[Decimal, str]) == Decimal("1.5")
+
+    @define
+    class UnionHolder:
+        v: Union[Decimal, str]
+
+    assert converter.loads(
+        converter.dumps(UnionHolder(Decimal("1.5"))), UnionHolder
+    ) == (UnionHolder(Decimal("1.5")))
+
+
+@pytest.mark.parametrize(
+    "converter_factory",
+    [
+        pytest.param(json_make_converter, id="json"),
+        pytest.param(ujson_make_converter, id="ujson"),
+        pytest.param(msgpack_make_converter, id="msgpack"),
+        pytest.param(tomlkit_make_converter, id="tomlkit"),
+    ],
+)
+def test_decimal_union_spillover_string_formats(
+    converter_factory: Callable[..., Converter],
+):
+    """In string-carrying formats, Decimal is deliberately not in the union
+    passthrough whitelist, so unions containing it convert via the spillover path.
+
+    Strings matching a `str` union member still pass through as strings.
+    """
+    converter = converter_factory()
+
+    assert converter.structure("12.34", Union[Decimal, int]) == Decimal("12.34")
+    assert converter.structure(5, Union[Decimal, int]) == 5
+    # `str` members take precedence in passthrough unions.
+    assert converter.structure("12.34", Union[Decimal, str]) == "12.34"

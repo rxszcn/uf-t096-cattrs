@@ -13,6 +13,9 @@ Our backwards-compatibility policy can be found [here](https://github.com/python
 
 ## NEXT
 
+- All preconfigured converters (`cattrs.preconf`) now support {class}`decimal.Decimal` out of the box, losslessly in both directions.
+  Decimals are carried as strings in the _json_, _ujson_, _orjson_, _msgpack_, _pyyaml_, _tomlkit_ and _tomllib_ converters (and by _msgspec_ itself in the _msgspec_ converter), as CBOR tag 4 decimal fractions in the _cbor2_ converter, and as `Decimal128` in the _bson_ converter.
+  See [the documentation](https://catt.rs/en/latest/preconf.html#decimals) for the reasoning, costs and union passthrough interplay.
 - Fix the msgspec converter passing typed deques directly to the encoder, which cannot serialize them. Deques are now unstructured into lists, including when nested in attrs classes or dataclasses.
   ([#818](https://github.com/python-attrs/cattrs/issues/818) [#819](https://github.com/python-attrs/cattrs/pull/819))
 

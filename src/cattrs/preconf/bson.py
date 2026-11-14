@@ -3,9 +3,11 @@
 from base64 import b85decode, b85encode
 from collections.abc import Set
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, TypeVar, Union
 
 from bson import DEFAULT_CODEC_OPTIONS, CodecOptions, Int64, ObjectId, decode, encode
+from bson.decimal128 import Decimal128
 from typing_extensions import TypeForm
 
 from .._compat import is_mapping, is_subclass
@@ -18,6 +20,7 @@ from ..strategies import configure_union_passthrough
 from . import (
     is_primitive_enum,
     literals_with_enums_unstructure_factory,
+    structure_decimal,
     validate_datetime,
     wrap,
 )
@@ -27,6 +30,13 @@ T = TypeVar("T")
 
 class Base85Bytes(bytes):
     """A subclass to help with binary key encoding/decoding."""
+
+
+def structure_decimal_bson(v: Any, _: Any) -> Decimal:
+    """Structure a Decimal from a Decimal128, falling back to the shared hook."""
+    if isinstance(v, Decimal128):
+        return v.to_decimal()
+    return structure_decimal(v, _)
 
 
 class BsonConverter(Converter):
@@ -63,6 +73,7 @@ def configure_converter(converter: BaseConverter):
     Configure the converter for use with the bson library.
 
     * sets are serialized as lists
+    * decimals are serialized as BSON Decimal128 values
     * byte mapping keys are base85-encoded into strings when unstructuring, and reverse
     * non-string, non-byte mapping keys are coerced into strings when unstructuring
     * a deserialization hook is registered for bson.ObjectId by default
@@ -70,6 +81,11 @@ def configure_converter(converter: BaseConverter):
 
     .. versionchanged:: 24.2.0
         Enums are left to the library to unstructure, speeding them up.
+    .. versionchanged:: NEXT
+        Decimals are un/structured as BSON Decimal128 values, and Decimal128
+        is included in the union passthrough configuration. Decimal128 is
+        limited to 34 significant digits; unstructuring a more precise
+        Decimal raises `decimal.Inexact`.
     """
 
     def gen_unstructure_mapping(cl: Any, unstructure_to=None):
@@ -100,8 +116,13 @@ def configure_converter(converter: BaseConverter):
     converter.register_structure_hook_factory(is_mapping, gen_structure_mapping)
 
     converter.register_structure_hook(ObjectId, lambda v, _: ObjectId(v))
+    converter.register_unstructure_hook(Decimal, Decimal128)
+    converter.register_structure_hook(Decimal, structure_decimal_bson)
     configure_union_passthrough(
-        Union[str, bool, int, float, None, bytes, datetime, ObjectId, Int64], converter
+        Union[
+            str, bool, int, float, None, bytes, datetime, ObjectId, Int64, Decimal128
+        ],
+        converter,
     )
 
     # datetime inherits from date, so identity unstructure hook used

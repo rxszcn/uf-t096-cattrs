@@ -2,6 +2,7 @@
 
 from collections.abc import Set
 from datetime import date, datetime, time, timezone
+from decimal import Decimal
 from typing import Any, TypeVar, Union
 
 from msgpack import dumps, loads
@@ -14,7 +15,9 @@ from ..strategies import configure_union_passthrough
 from . import (
     is_primitive_enum,
     literals_with_enums_unstructure_factory,
+    structure_decimal,
     unstructure_datetime_as_timestamp,
+    unstructure_decimal_as_str,
     wrap,
 )
 
@@ -42,11 +45,14 @@ def configure_converter(converter: BaseConverter) -> None:
     Configure the converter for use with the msgpack library.
 
     * datetimes are serialized as timestamp floats
+    * decimals are serialized as strings
     * sets are serialized as lists
     * string and int enums are passed through when unstructuring
 
     .. versionchanged:: 24.2.0
         Enums are left to the library to unstructure, speeding them up.
+    .. versionchanged:: NEXT
+        Decimals are un/structured as strings, preserving full precision.
     """
     converter.register_unstructure_hook(datetime, unstructure_datetime_as_timestamp)
     converter.register_structure_hook(
@@ -58,6 +64,8 @@ def configure_converter(converter: BaseConverter) -> None:
     converter.register_structure_hook(
         date, lambda v, _: datetime.fromtimestamp(v, timezone.utc).date()
     )
+    converter.register_unstructure_hook(Decimal, unstructure_decimal_as_str)
+    converter.register_structure_hook(Decimal, structure_decimal)
     converter.register_unstructure_hook_factory(is_primitive_enum, lambda t: identity)
     converter.register_unstructure_hook_factory(
         is_literal_containing_enums, literals_with_enums_unstructure_factory

@@ -3,6 +3,7 @@
 from base64 import b85decode, b85encode
 from collections.abc import Set
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from operator import attrgetter
 from typing import Any, TypeVar, Union
@@ -23,7 +24,7 @@ from .._compat import is_mapping, is_subclass
 from ..converters import BaseConverter, Converter
 from ..fns import identity
 from ..strategies import configure_union_passthrough
-from . import validate_datetime, wrap
+from . import structure_decimal, unstructure_decimal_as_str, validate_datetime, wrap
 
 __all__ = ["TomllibConverter", "configure_converter", "make_converter"]
 
@@ -56,13 +57,21 @@ def configure_converter(converter: BaseConverter):
     * bytes are serialized as base85 strings
     * sets are serialized as lists
     * tuples are serializas as lists
+    * decimals are serialized as strings
     * mapping keys are coerced into strings when unstructuring
     * dates and datetimes are left for tomllib to handle
+
+    .. versionchanged:: NEXT
+        Decimals are un/structured as strings, preserving full precision.
+        (_tomli-w_ would otherwise silently unstructure them as floats,
+        losing precision.)
     """
     converter.register_structure_hook(bytes, lambda v, _: b85decode(v))
     converter.register_unstructure_hook(
         bytes, lambda v: (b85encode(v) if v else b"").decode("utf8")
     )
+    converter.register_unstructure_hook(Decimal, unstructure_decimal_as_str)
+    converter.register_structure_hook(Decimal, structure_decimal)
 
     @converter.register_unstructure_hook_factory(is_mapping)
     def gen_unstructure_mapping(cl: Any, unstructure_to=None):

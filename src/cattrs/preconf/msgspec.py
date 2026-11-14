@@ -6,6 +6,7 @@ from base64 import b64decode
 from collections.abc import Callable
 from dataclasses import is_dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from functools import partial
 from threading import local
@@ -34,7 +35,7 @@ from ..fns import identity
 from ..gen import make_hetero_tuple_unstructure_fn
 from ..literals import is_literal_containing_enums
 from ..strategies import configure_union_passthrough
-from . import literals_with_enums_unstructure_factory, wrap
+from . import literals_with_enums_unstructure_factory, structure_decimal, wrap
 
 __all__ = ["MsgspecJsonConverter", "configure_converter", "make_converter"]
 
@@ -88,12 +89,16 @@ def configure_converter(converter: Converter) -> None:
 
     * bytes are serialized as base64 strings, directly by msgspec
     * datetimes and dates are passed through to be serialized as RFC 3339 directly
+    * decimals are passed through to be serialized as JSON strings by msgspec itself
     * enums are passed through to msgspec directly
     * union passthrough configured for str, bool, int, float and None
     * bare, string and int enums are passed through when unstructuring
 
     .. versionchanged:: 24.2.0
         Enums are left to the library to unstructure, speeding them up.
+    .. versionchanged:: NEXT
+        Decimals are passed through to msgspec, which serializes them as
+        JSON strings, preserving full precision.
     """
     configure_passthroughs(converter)
 
@@ -102,6 +107,8 @@ def configure_converter(converter: Converter) -> None:
         lambda t: is_subclass(t, Enum), lambda t, c: identity
     )
 
+    converter.register_unstructure_hook(Decimal, identity)
+    converter.register_structure_hook(Decimal, structure_decimal)
     converter.register_structure_hook(Struct, convert)
     converter.register_structure_hook(bytes, lambda v, _: b64decode(v))
     converter.register_structure_hook(datetime, lambda v, _: convert(v, datetime))

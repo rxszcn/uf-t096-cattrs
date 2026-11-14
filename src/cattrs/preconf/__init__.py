@@ -1,5 +1,6 @@
 from collections.abc import Callable
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, ParamSpec, TypeVar, get_args
 
@@ -27,6 +28,38 @@ def unstructure_datetime_as_timestamp(v: datetime) -> float:
     if v.tzinfo is None:
         v = v.replace(tzinfo=timezone.utc)
     return v.timestamp()
+
+
+def unstructure_decimal_as_str(v: Decimal) -> str:
+    """Unstructure a Decimal into its string representation.
+
+    The string form is exact for any Decimal, unlike a float, so no
+    precision is lost for formats without a native decimal type.
+    """
+    return str(v)
+
+
+def structure_decimal(v: Any, _: Any) -> Decimal:
+    """Structure a Decimal from a Decimal, string, integer or float.
+
+    Floats are converted through their shortest round-trip string form so
+    binary floating point artifacts (``Decimal(0.1)`` has 55 digits) do not
+    leak into the result.
+
+    Raises `ValueError` for anything else, so failures are collected into
+    the usual validation errors (`ClassValidationError` and friends) when
+    detailed validation is enabled.
+    """
+    if isinstance(v, Decimal):
+        return v
+    if isinstance(v, float):
+        return Decimal(str(v))
+    if isinstance(v, (str, int)):
+        try:
+            return Decimal(v)
+        except InvalidOperation:
+            raise ValueError(f"Cannot structure {v!r} as a Decimal") from None
+    raise ValueError(f"Expected a Decimal, string, integer or float, got {v!r}")
 
 
 T = TypeVar("T")

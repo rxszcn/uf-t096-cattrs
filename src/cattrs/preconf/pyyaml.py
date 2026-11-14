@@ -1,6 +1,7 @@
 """Preconfigured converters for pyyaml."""
 
 from datetime import date, datetime
+from decimal import Decimal
 from functools import partial
 from typing import Any, TypeVar, Union
 
@@ -11,7 +12,7 @@ from .._compat import FrozenSetSubscriptable
 from ..cols import is_namedtuple, namedtuple_unstructure_factory
 from ..converters import BaseConverter, Converter
 from ..strategies import configure_union_passthrough
-from . import validate_datetime, wrap
+from . import structure_decimal, unstructure_decimal_as_str, validate_datetime, wrap
 
 __all__ = ["PyyamlConverter", "configure_converter", "make_converter"]
 
@@ -45,10 +46,13 @@ def configure_converter(converter: BaseConverter) -> None:
     * frozensets are serialized as lists
     * string enums are converted into strings explicitly
     * datetimes and dates are validated
+    * decimals are serialized as strings
     * typed namedtuples are serialized as lists
 
     .. versionchanged:: 24.1.0
         Add support for typed namedtuples.
+    .. versionchanged:: NEXT
+        Decimals are un/structured as strings, preserving full precision.
     """
     converter.register_unstructure_hook(
         str, lambda v: v if v.__class__ is str else v.value
@@ -59,6 +63,9 @@ def configure_converter(converter: BaseConverter) -> None:
     converter.register_unstructure_hook(datetime, lambda v: v)
     converter.register_structure_hook(datetime, validate_datetime)
     converter.register_structure_hook(date, validate_date)
+
+    converter.register_unstructure_hook(Decimal, unstructure_decimal_as_str)
+    converter.register_structure_hook(Decimal, structure_decimal)
 
     converter.register_unstructure_hook_factory(is_namedtuple)(
         partial(namedtuple_unstructure_factory, unstructure_to=tuple)

@@ -3,6 +3,7 @@
 from base64 import b85decode, b85encode
 from collections.abc import Set
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from functools import partial
 from typing import Any, TypeVar, Union
@@ -16,7 +17,13 @@ from ..converters import Converter
 from ..fns import identity
 from ..literals import is_literal_containing_enums
 from ..strategies import configure_union_passthrough
-from . import is_primitive_enum, literals_with_enums_unstructure_factory, wrap
+from . import (
+    is_primitive_enum,
+    literals_with_enums_unstructure_factory,
+    structure_decimal,
+    unstructure_decimal_as_str,
+    wrap,
+)
 
 __all__ = ["OrjsonConverter", "configure_converter", "make_converter"]
 
@@ -45,6 +52,7 @@ def configure_converter(converter: Converter) -> None:
 
     * bytes are serialized as base85 strings
     * datetimes and dates are passed through to be serialized as RFC 3339 by orjson
+    * decimals are serialized as strings
     * typed namedtuples are serialized as lists
     * sets are serialized as lists
     * string enum mapping keys have special handling
@@ -55,6 +63,8 @@ def configure_converter(converter: Converter) -> None:
         Add support for typed namedtuples.
     .. versionchanged:: 24.2.0
         Enums are left to the library to unstructure, speeding them up.
+    .. versionchanged:: NEXT
+        Decimals are un/structured as strings, preserving full precision.
     """
     converter.register_unstructure_hook(
         bytes, lambda v: (b85encode(v) if v else b"").decode("utf8")
@@ -63,6 +73,9 @@ def configure_converter(converter: Converter) -> None:
 
     converter.register_structure_hook(datetime, lambda v, _: datetime.fromisoformat(v))
     converter.register_structure_hook(date, lambda v, _: date.fromisoformat(v))
+
+    converter.register_unstructure_hook(Decimal, unstructure_decimal_as_str)
+    converter.register_structure_hook(Decimal, structure_decimal)
 
     def unstructure_mapping_factory(cl: Any, unstructure_to=None):
         key_handler = str
